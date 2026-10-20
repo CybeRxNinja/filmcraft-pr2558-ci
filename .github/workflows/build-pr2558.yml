@@ -1,0 +1,122 @@
+name: Build PR 2558
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-pr2558
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_RELEASE_LTO: "false"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
+      CARGO_PROFILE_RELEASE_STRIP: "symbols"
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust 1.99.1
+        run: |
+          set -euo pipefail
+          if ! command -v rustup >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain 1.99.1
+            . "$HOME/.cargo/env"
+          fi
+          rustup toolchain install 1.99.1 --profile minimal --no-self-update
+          rustup default 1.99.1
+          rustc -Vv
+          cargo -V
+
+      - name: Install Linux build dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config \
+            libgtk-3-dev libasound2-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev \
+            libwayland-dev libx11-dev libxcb1-dev \
+            libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev \
+            libvulkan-dev
+          sudo apt-get install -y --no-install-recommends \
+            libegl1-mesa-dev libgles2-mesa-dev libgbm-dev \
+            libssl-dev libdbus-1-dev libfontconfig1-dev libfreetype-dev || true
+
+      - name: Prepare target directory
+        run: |
+          set -euo pipefail
+          if [ -d /mnt ] && [ -w /mnt ]; then
+            TARGET=/mnt/filmcraft-target
+          else
+            TARGET="$GITHUB_WORKSPACE/target"
+          fi
+          mkdir -p "$TARGET"
+          echo "CARGO_TARGET_DIR=$TARGET" >> "$GITHUB_ENV"
+          df -h "$TARGET"
+
+      - name: Build at reviewed commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git checkout --detach 4ad0171ea29d1d2db05678034bcdfe5313f2373d
+          if [ -f .gitmodules ]; then git submodule update --init --recursive; fi
+          {
+            echo "source_commit=$(git rev-parse HEAD)"
+            echo "source_commit_short=$(git rev-parse --short HEAD)"
+            echo "build_date_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "workflow_run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            rustc -Vv
+            cargo -V
+            uname -a
+          } | tee build-info.txt
+          cargo build --release -p filmcraft --locked 2>&1 | tee build.log
+
+      - name: Package artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$CARGO_TARGET_DIR/release/filmcraft"
+          strip "$BIN" || true
+          mkdir -p out
+          cp "$BIN" out/filmcraft
+          cp build-info.txt out/build-info.txt
+          {
+            echo "artifact_sha256=$(sha256sum out/filmcraft | awk '{print $1}')"
+            echo "artifact_size_bytes=$(stat -c%s out/filmcraft)"
+            echo "--- file ---"
+            file out/filmcraft
+            echo "--- ldd ---"
+            ldd out/filmcraft || true
+          } | tee -a out/build-info.txt
+          ls -lh out/
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: filmcraft-pr2558-linux-x86_64
+          path: out/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Summary
+        run: |
+          {
+            echo "### FilmCraft PR #2558 build"
+            echo ""
+            echo "- Source commit: \`$(git rev-parse HEAD)\`"
+            echo "- Artifact SHA256: \`$(sha256sum out/filmcraft | awk '{print $1}')\`"
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } >> "$GITHUB_STEP_SUMMARY"
