@@ -24,7 +24,7 @@ jobs:
       CARGO_PROFILE_RELEASE_STRIP: "symbols"
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -104,7 +104,7 @@ jobs:
           ls -lh out/
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: filmcraft-pr2558-linux-x86_64
           path: out/
