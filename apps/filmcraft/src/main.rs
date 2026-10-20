@@ -132,6 +132,8 @@ fn main() -> eframe::Result {
     }
     // A panic before the app exists moves on once per process; a second is not the mode's fault.
     let mut moved_on_after_panic = false;
+    // A second panic saved the next mode for the next launch (it is not tried in this process).
+    let mut next_saved = false;
     let mut app_ran = false;
     let started = loop {
         let mut options = native_options(launch.control_port.is_some());
@@ -158,6 +160,9 @@ fn main() -> eframe::Result {
                     moved_on_after_panic = true;
                     continue;
                 }
+                // Not retried here, but the next launch starts in the next mode (software after
+                // the integrated GPU), instead of going back to the ones that failed.
+                next_saved = graphics.step_down();
                 Err(eframe::Error::AppCreation(what.into()))
             }
         };
@@ -182,7 +187,9 @@ fn main() -> eframe::Result {
         let mut msg = format!("FilmCraft could not start its window: {e}\n\nUpdating the graphics driver usually fixes this.");
         // Every fallback failed as well (no software adapter installed, say, #2553): the next
         // start tries the default again instead of the last mode, which can't start here.
-        if !app_ran && graphics.degraded() && graphics.reset_to_default().is_ok() {
+        if next_saved {
+            msg.push_str(&format!(" The next start uses {}.", graphics.mode().label()));
+        } else if !app_ran && graphics.degraded() && graphics.reset_to_default().is_ok() {
             msg.push_str(&format!(
                 " The next start tries the default graphics again instead of {}; `--graphics <mode>` picks one (see `filmcraft --help`).",
                 graphics.mode().label()
