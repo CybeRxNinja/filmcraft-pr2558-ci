@@ -221,11 +221,17 @@ fn relaunch(mode: graphics::Mode) -> std::io::Result<i32> {
     Ok(status.code().unwrap_or(1))
 }
 
-/// `args` with any `--graphics <mode>` replaced by `--graphics <mode>` for the new start.
+/// `args` with any `--graphics <mode>` replaced by `--graphics <mode>` for the new start. The
+/// option goes before a `--`, and what follows `--` (files, whatever their names) is kept as it is.
 fn relaunch_args(args: impl IntoIterator<Item = std::ffi::OsString>, mode: graphics::Mode) -> Vec<std::ffi::OsString> {
     let mut out = Vec::new();
     let mut args = args.into_iter();
     while let Some(a) = args.next() {
+        if a == "--" {
+            out.extend(["--graphics".into(), mode.name().into(), a]);
+            out.extend(args);
+            return out;
+        }
         if a == "--graphics" {
             let _ = args.next();
         } else {
@@ -602,6 +608,11 @@ mod tests {
         assert_eq!(super::relaunch_args(os(&["--graphics", "default", "a.fcproj"]), low), os(&["a.fcproj", "--graphics", "low-power"]));
         // a trailing `--graphics` without its value does not take anything else along
         assert_eq!(super::relaunch_args(os(&["x", "--graphics"]), low), os(&["x", "--graphics", "low-power"]));
+        // the option stays before `--`; files after it, named like options too, are kept
+        assert_eq!(
+            super::relaunch_args(os(&["--graphics", "default", "--", "--graphics", "a.fcproj"]), low),
+            os(&["--graphics", "low-power", "--", "--graphics", "a.fcproj"])
+        );
     }
 
     /// A panic out of a graphics start is reported with its message, whatever its payload (#2553).
