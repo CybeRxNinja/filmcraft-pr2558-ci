@@ -130,9 +130,7 @@ fn main() -> eframe::Result {
     if graphics.mode() == graphics::Mode::Default {
         register_gpu_frame_renderer();
     }
-    // A panic before the app exists moves on once per process; a second is not the mode's fault.
-    let mut moved_on_after_panic = false;
-    // A second panic saved the next mode for the next launch (it is not tried in this process).
+    // A panic in a FilmCraft started again for it saved the next mode for the next launch.
     let mut next_saved = false;
     let mut app_ran = false;
     let started = loop {
@@ -153,16 +151,21 @@ fn main() -> eframe::Result {
             // configure it (NVIDIA 470 on Wayland, #2553). The crash log has the backtrace.
             Err(panic) => {
                 let what = format!("the graphics device panicked: {}", panic_text(panic.as_ref()));
-                if !moved_on_after_panic && graphics.step_down() {
-                    log::warn!("graphics start failed: {what}");
-                    // Logged; not for the in-app error window of the start that follows.
-                    let _ = filmcraft_ui_egui::crash::take_last();
-                    moved_on_after_panic = true;
-                    continue;
-                }
-                // Not retried here, but the next launch starts in the next mode (software after
-                // the integrated GPU), instead of going back to the ones that failed.
+                log::warn!("graphics start failed: {what}");
+                // Logged; not for the in-app error window of a start that follows.
+                let _ = filmcraft_ui_egui::crash::take_last();
+                // The next mode is saved either way, so the next launch starts in it instead of
+                // the ones that failed (software after the integrated GPU).
                 next_saved = graphics.step_down();
+                // The event loop does not run again in a process it unwound out of (a second
+                // `run_native` returns at once, #2558): FilmCraft starts again in that mode, once.
+                if next_saved && std::env::var_os(RELAUNCHED).is_none() {
+                    graphics.finish();
+                    match relaunch(graphics.mode()) {
+                        Ok(code) => std::process::exit(code),
+                        Err(e) => log::error!("can't start FilmCraft again in graphics mode {}: {e}", graphics.mode().name()),
+                    }
+                }
                 Err(eframe::Error::AppCreation(what.into()))
             }
         };
@@ -200,6 +203,37 @@ fn main() -> eframe::Result {
         let _ = rfd::MessageDialog::new().set_title("FilmCraft").set_description(&msg).set_level(rfd::MessageLevel::Error).show();
     }
     started
+}
+
+/// Set for a FilmCraft started again after its graphics panicked (#2553), so that one does not
+/// start a third.
+const RELAUNCHED: &str = "FILMCRAFT_GRAPHICS_RELAUNCHED";
+
+/// Start FilmCraft again with the same arguments in graphics `mode` and wait for it; its exit code.
+fn relaunch(mode: graphics::Mode) -> std::io::Result<i32> {
+    // an AppImage runs from a mount that ends with its first process: start the AppImage itself
+    let exe = match std::env::var_os("APPIMAGE") {
+        Some(image) => std::path::PathBuf::from(image),
+        None => std::env::current_exe()?,
+    };
+    log::warn!("starting FilmCraft again in graphics mode {}", mode.name());
+    let status = std::process::Command::new(exe).args(relaunch_args(std::env::args_os().skip(1), mode)).env(RELAUNCHED, "1").status()?;
+    Ok(status.code().unwrap_or(1))
+}
+
+/// `args` with any `--graphics <mode>` replaced by `--graphics <mode>` for the new start.
+fn relaunch_args(args: impl IntoIterator<Item = std::ffi::OsString>, mode: graphics::Mode) -> Vec<std::ffi::OsString> {
+    let mut out = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(a) = args.next() {
+        if a == "--graphics" {
+            let _ = args.next();
+        } else {
+            out.push(a);
+        }
+    }
+    out.extend(["--graphics".into(), mode.name().into()]);
+    out
 }
 
 /// The message of a caught panic, if it has one.
@@ -558,6 +592,18 @@ fn project_patterns() -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// The new start after a graphics panic keeps the arguments and picks the next mode, replacing a
+    /// `--graphics` that was given (#2558).
+    #[test]
+    fn a_relaunch_keeps_the_arguments_with_the_next_mode() {
+        let os = |v: &[&str]| v.iter().map(std::ffi::OsString::from).collect::<Vec<_>>();
+        let low = crate::graphics::Mode::LowPower;
+        assert_eq!(super::relaunch_args(os(&["--demo"]), low), os(&["--demo", "--graphics", "low-power"]));
+        assert_eq!(super::relaunch_args(os(&["--graphics", "default", "a.fcproj"]), low), os(&["a.fcproj", "--graphics", "low-power"]));
+        // a trailing `--graphics` without its value does not take anything else along
+        assert_eq!(super::relaunch_args(os(&["x", "--graphics"]), low), os(&["x", "--graphics", "low-power"]));
+    }
+
     /// A panic out of a graphics start is reported with its message, whatever its payload (#2553).
     #[test]
     fn a_caught_panic_keeps_its_message() {

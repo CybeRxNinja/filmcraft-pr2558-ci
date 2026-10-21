@@ -24,8 +24,9 @@
 //! [`FAILURES_TO_MOVE_ON`] such failures in a row in the same mode, the launch moves on to the next
 //! [`Mode`] of the platform's [`LADDER`] and keeps it; a start that paints resets the count. A
 //! start-up error that wgpu does report (no adapter, device creation failed) moves on at once,
-//! within the same process, and so does a panic out of wgpu before the app exists (a surface the
-//! chosen GPU claimed and then could not configure, #2553), once per process.
+//! within the same process. A panic out of wgpu before the app exists (a surface the chosen GPU
+//! claimed and then could not configure, #2553) saves the next mode and starts FilmCraft again in
+//! it, once: the event loop does not run again in a process it unwound out of.
 //!
 //! # Getting back
 //! A fallback mode shows a notice with a reset button in the window (`graphics.notice.reset`,
